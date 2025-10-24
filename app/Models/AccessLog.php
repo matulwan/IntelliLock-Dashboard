@@ -1,0 +1,43 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class AccessLog extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'user',
+        'type',
+        'timestamp',
+        'status',
+        'role',
+        'device',
+        'lab_key_id',
+        'key_name'
+    ];
+
+    protected $casts = [
+        'timestamp' => 'datetime',
+    ];
+
+    /**
+     * Get the lab key associated with this access log
+     */
+    public function labKey()
+    {
+        return $this->belongsTo(LabKey::class);
+    }
+
+    /**
+     * Get the display name for the accessed item
+     * Returns key name if available, otherwise device name
+     */
+    public function getAccessedItemAttribute(): string
+    {
+        return $this->key_name ?? $this->device ?? 'Unknown';
+    }
+}
