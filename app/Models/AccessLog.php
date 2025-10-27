@@ -33,11 +33,43 @@ class AccessLog extends Model
     }
 
     /**
+     * Get photos associated with this access log
+     */
+    public function photos()
+    {
+        return $this->hasMany(EventPhoto::class);
+    }
+
+    /**
      * Get the display name for the accessed item
      * Returns key name if available, otherwise device name
      */
     public function getAccessedItemAttribute(): string
     {
         return $this->key_name ?? $this->device ?? 'Unknown';
+    }
+
+    /**
+     * Scope for successful access
+     */
+    public function scopeSuccessful($query)
+    {
+        return $query->where('status', 'success');
+    }
+
+    /**
+     * Scope for denied access
+     */
+    public function scopeDenied($query)
+    {
+        return $query->where('status', 'denied');
+    }
+
+    /**
+     * Scope for today's logs
+     */
+    public function scopeToday($query)
+    {
+        return $query->whereDate('timestamp', today());
     }
 }

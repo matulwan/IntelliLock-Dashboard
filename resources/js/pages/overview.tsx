@@ -127,34 +127,21 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
         return `M ${points.join(' L ')}`;
     };
 
-    const systemStatus = {
-        lock: 'unlocked',
-        camera: 'online',
-    };
+    // Use real data from backend
+    const latestUnlock = recentActivity && recentActivity.length > 0 ? {
+        name: recentActivity[0].user,
+        time: recentActivity[0].timestamp,
+        type: recentActivity[0].type === 'fingerprint' ? 'Biometric' : 'RFID',
+    } : null;
 
-    // Mock for latest unlock event
-    const latestUnlock = {
-        name: 'Jane Smith',
-        time: '2024-01-16 09:42',
-        type: 'Biometric', // or 'RFID'
-    };
+    const latestKeyTaken = recentKeyTransactions && recentKeyTransactions.length > 0 ? {
+        room: recentKeyTransactions[0].key_name,
+        number: recentKeyTransactions[0].id,
+        time: recentKeyTransactions[0].transaction_time,
+    } : null;
 
-    // Mock for latest key taken event
-    const latestKeyTaken = {
-        room: 'Students Hub',
-        number: 101,
-        time: '2024-01-16 10:15',
-    };
-
-    // Mock for security snaps
-    const securitySnaps = [
-        { url: 'https://placekitten.com/320/240', time: '2024-01-16 09:40' },
-        { url: 'https://placekitten.com/321/240', time: '2024-01-16 08:55' },
-        { url: 'https://placekitten.com/322/240', time: '2024-01-16 08:10' },
-        { url: 'https://placekitten.com/323/240', time: '2024-01-16 07:30' },
-        { url: 'https://placekitten.com/324/240', time: '2024-01-16 06:50' },
-    ];
-    const latestSnap = securitySnaps[0];
+    // No security snaps yet - will be populated when ESP32-CAM uploads photos
+    const latestSnap = null;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -196,40 +183,52 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                     </motion.div>
                                     Latest Unlock
                                 </CardTitle>
-                                <span className="text-xs text-muted-foreground">{latestUnlock.time}</span>
+                                {latestUnlock && <span className="text-xs text-muted-foreground">{latestUnlock.time}</span>}
                             </CardHeader>
                             <CardContent className="flex items-center gap-4">
-                                <motion.div 
-                                    className="flex items-center gap-3"
-                                    whileHover={{ scale: 1.01 }}
-                                >
-                                    <motion.div 
-                                        className="rounded-full bg-blue-100 p-2"
-                                        whileHover={{ rotate: 10 }}
-                                    >
-                                        <Users className="h-6 w-6 text-blue-600" />
-                                    </motion.div>
-                                    <div>
+                                {latestUnlock ? (
+                                    <>
                                         <motion.div 
-                                            className="font-semibold text-lg"
-                                            whileHover={{ x: 2 }}
+                                            className="flex items-center gap-3"
+                                            whileHover={{ scale: 1.01 }}
                                         >
-                                            {latestUnlock.name}
+                                            <motion.div 
+                                                className="rounded-full bg-blue-100 p-2"
+                                                whileHover={{ rotate: 10 }}
+                                            >
+                                                <Users className="h-6 w-6 text-blue-600" />
+                                            </motion.div>
+                                            <div>
+                                                <motion.div 
+                                                    className="font-semibold text-lg"
+                                                    whileHover={{ x: 2 }}
+                                                >
+                                                    {latestUnlock.name}
+                                                </motion.div>
+                                                <div className="text-xs text-muted-foreground">Unlocked the Intelli-Lock</div>
+                                            </div>
                                         </motion.div>
-                                        <div className="text-xs text-muted-foreground">Unlocked the Intelli-Lock</div>
+                                        <motion.div 
+                                            className="ml-auto flex items-center gap-2"
+                                            whileHover={{ scale: 1.05 }}
+                                        >
+                                            {latestUnlock.type === 'Biometric' ? (
+                                                <Fingerprint className="h-5 w-5 text-purple-600" />
+                                            ) : (
+                                                <CreditCard className="h-5 w-5 text-green-600" />
+                                            )}
+                                            <span className="text-sm font-medium capitalize">{latestUnlock.type}</span>
+                                        </motion.div>
+                                    </>
+                                ) : (
+                                    <div className="flex items-center gap-3 text-muted-foreground">
+                                        <Lock className="h-6 w-6" />
+                                        <div>
+                                            <div className="font-medium">No unlock events yet</div>
+                                            <div className="text-xs">Waiting for ESP32 data...</div>
+                                        </div>
                                     </div>
-                                </motion.div>
-                                <motion.div 
-                                    className="ml-auto flex items-center gap-2"
-                                    whileHover={{ scale: 1.05 }}
-                                >
-                                    {latestUnlock.type === 'Biometric' ? (
-                                        <Fingerprint className="h-5 w-5 text-purple-600" />
-                                    ) : (
-                                        <CreditCard className="h-5 w-5 text-green-600" />
-                                    )}
-                                    <span className="text-sm font-medium capitalize">{latestUnlock.type}</span>
-                                </motion.div>
+                                )}
                             </CardContent>
                         </Card>
                     </motion.div>
@@ -244,29 +243,39 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                     </motion.div>
                                     Latest Key Taken
                                 </CardTitle>
-                                <span className="text-xs text-muted-foreground">{latestKeyTaken.time}</span>
+                                {latestKeyTaken && <span className="text-xs text-muted-foreground">{latestKeyTaken.time}</span>}
                             </CardHeader>
                             <CardContent className="flex items-center gap-4">
-                                <motion.div 
-                                    className="flex items-center gap-3"
-                                    whileHover={{ scale: 1.01 }}
-                                >
+                                {latestKeyTaken ? (
                                     <motion.div 
-                                        className="rounded-full bg-yellow-100 p-2"
-                                        whileHover={{ rotate: 10 }}
+                                        className="flex items-center gap-3"
+                                        whileHover={{ scale: 1.01 }}
                                     >
-                                        <DoorOpen className="h-6 w-6 text-yellow-600" />
-                                    </motion.div>
-                                    <div>
                                         <motion.div 
-                                            className="font-semibold text-lg"
-                                            whileHover={{ x: 2 }}
+                                            className="rounded-full bg-yellow-100 p-2"
+                                            whileHover={{ rotate: 10 }}
                                         >
-                                            {latestKeyTaken.room}
+                                            <DoorOpen className="h-6 w-6 text-yellow-600" />
                                         </motion.div>
-                                        <div className="text-xs text-muted-foreground">Room #{latestKeyTaken.number}</div>
+                                        <div>
+                                            <motion.div 
+                                                className="font-semibold text-lg"
+                                                whileHover={{ x: 2 }}
+                                            >
+                                                {latestKeyTaken.room}
+                                            </motion.div>
+                                            <div className="text-xs text-muted-foreground">Transaction #{latestKeyTaken.number}</div>
+                                        </div>
+                                    </motion.div>
+                                ) : (
+                                    <div className="flex items-center gap-3 text-muted-foreground">
+                                        <Key className="h-6 w-6" />
+                                        <div>
+                                            <div className="font-medium">No key transactions yet</div>
+                                            <div className="text-xs">Waiting for ESP32 data...</div>
+                                        </div>
                                     </div>
-                                </motion.div>
+                                )}
                             </CardContent>
                         </Card>
                     </motion.div>
@@ -281,33 +290,45 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                     </motion.div>
                                     Latest Security Snap
                                 </CardTitle>
-                                <span className="text-xs text-muted-foreground">{latestSnap.time}</span>
+                                {latestSnap && <span className="text-xs text-muted-foreground">{latestSnap.time}</span>}
                             </CardHeader>
                             <CardContent className="flex items-center gap-4">
-                                <motion.div 
-                                    whileHover={{ scale: 1.05 }}
-                                    className="relative"
-                                >
-                                    <img 
-                                        src={latestSnap.url} 
-                                        alt="Latest Security Snap" 
-                                        className="w-32 h-24 object-cover rounded border" 
-                                    />
-                                    <motion.div 
-                                        className="absolute inset-0 bg-black/20 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity"
-                                        whileHover={{ opacity: 1 }}
-                                    >
-                                        <motion.button 
-                                            className="bg-white/90 text-black px-3 py-1 rounded-full text-xs font-medium shadow"
-                                            whileHover={{ scale: 1.1 }}
+                                {latestSnap ? (
+                                    <>
+                                        <motion.div 
+                                            whileHover={{ scale: 1.05 }}
+                                            className="relative"
                                         >
-                                            View Full Size
-                                        </motion.button>
-                                    </motion.div>
-                                </motion.div>
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-xs text-muted-foreground">Most recent snapshot from ESP32 cam</span>
-                                </div>
+                                            <img 
+                                                src={latestSnap.url} 
+                                                alt="Latest Security Snap" 
+                                                className="w-32 h-24 object-cover rounded border" 
+                                            />
+                                            <motion.div 
+                                                className="absolute inset-0 bg-black/20 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity"
+                                                whileHover={{ opacity: 1 }}
+                                            >
+                                                <motion.button 
+                                                    className="bg-white/90 text-black px-3 py-1 rounded-full text-xs font-medium shadow"
+                                                    whileHover={{ scale: 1.1 }}
+                                                >
+                                                    View Full Size
+                                                </motion.button>
+                                            </motion.div>
+                                        </motion.div>
+                                        <div className="flex flex-col gap-1">
+                                            <span className="text-xs text-muted-foreground">Most recent snapshot from ESP32 cam</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="flex items-center gap-3 text-muted-foreground">
+                                        <Video className="h-6 w-6" />
+                                        <div>
+                                            <div className="font-medium">No photos yet</div>
+                                            <div className="text-xs">Waiting for ESP32-CAM...</div>
+                                        </div>
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
                     </motion.div>

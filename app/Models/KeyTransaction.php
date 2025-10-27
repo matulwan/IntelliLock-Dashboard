@@ -43,6 +43,14 @@ class KeyTransaction extends Model
     }
 
     /**
+     * Get photos associated with this transaction
+     */
+    public function photos()
+    {
+        return $this->hasMany(EventPhoto::class);
+    }
+
+    /**
      * Scope for checkout transactions
      */
     public function scopeCheckouts($query)
@@ -64,5 +72,13 @@ class KeyTransaction extends Model
     public function scopeToday($query)
     {
         return $query->whereDate('transaction_time', today());
+    }
+
+    /**
+     * Get formatted transaction time
+     */
+    public function getFormattedTimeAttribute(): string
+    {
+        return $this->transaction_time->format('M j, Y g:i A');
     }
 }
