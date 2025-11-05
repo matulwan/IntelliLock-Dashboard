@@ -15,6 +15,7 @@ use App\Events\AccessAttemptLogged;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class IoTController extends Controller
@@ -489,62 +490,339 @@ class IoTController extends Controller
      * Handle Intelli-Lock events from ESP32
      * Endpoint: POST /api/intellilock/event
      * 
+     * ESP32 sends JSON format:
+     * {
+     *   "action": "user_authenticated|door_unlocked|door_locked|key_taken|key_returned|unknown_key_tag|door_timeout",
+     *   "user": "RFID_UID or FP_ID",
+     *   "key_info": "Key name or UID",
+     *   "timestamp": millis()
+     * }
+     * 
      * Handles events:
-     * - door_unlocked (fingerprint or RFID opens door)
-     * - key_tagged_taken (first RFID tap - checkout)
-     * - key_tagged_returned (second RFID tap - checkin)
-     * - fingerprint_match (fingerprint verified)
-     * - door_timeout_alert (door left open > 20 seconds)
+     * - user_authenticated (user authenticated via RFID or fingerprint)
+     * - door_unlocked (door unlocked after authentication)
+     * - door_locked (door locked after transaction)
+     * - key_taken (key checked out)
+     * - key_returned (key checked in)
+     * - unknown_key_tag (unknown key tag detected)
+     * - door_timeout (door left open > 20 seconds)
      */
     public function intellilockEvent(Request $request): JsonResponse
     {
-        $request->validate([
-            'action' => 'required|string',
-            'extra' => 'nullable|string'
-        ]);
+        try {
+            // Support both old format (extra) and new format (user, key_info)
+            $request->validate([
+                'action' => 'required|string',
+                'user' => 'nullable|string',      // ESP32 sends this
+                'key_info' => 'nullable|string',  // ESP32 sends this
+                'extra' => 'nullable|string',     // Legacy support
+                'timestamp' => 'nullable|integer'
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed: ' . $e->getMessage(),
+                'errors' => $e->errors()
+            ], 422);
+        }
 
         $action = $request->action;
-        $extra = $request->extra ?? '';
+        $userIdentifier = $request->user ?? $request->extra ?? '';
+        $keyInfo = $request->key_info ?? '';
         $device = 'lab_key_box'; // Default device name
+
+        // Helper function to find user from identifier
+        $findUser = function($identifier) {
+            if (empty($identifier)) return null;
+            
+            // Check if it's a fingerprint ID (starts with FP_)
+            if (str_starts_with($identifier, 'FP_')) {
+                $fingerprintId = (int) str_replace('FP_', '', $identifier);
+                return User::where('fingerprint_id', $fingerprintId)
+                          ->where('iot_access', true)
+                          ->first();
+            }
+            
+            // Otherwise, treat as RFID UID
+            return User::where('rfid_uid', strtoupper($identifier))
+                      ->where('iot_access', true)
+                      ->first();
+        };
 
         try {
             switch ($action) {
-                case 'door_unlocked':
-                    // Log door unlock event
+                case 'user_authenticated':
+                    // User authenticated via RFID or fingerprint
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+                    $authType = str_starts_with($userIdentifier, 'FP_') ? 'fingerprint' : 'rfid';
+                    
                     $this->logAccessAttempt(
-                        'System',
-                        'door_unlock',
+                        $userName,
+                        $authType,
                         'success',
-                        'system',
+                        $user ? $user->role : 'user',
                         $device
                     );
                     
                     return response()->json([
                         'status' => 'success',
-                        'message' => 'Door unlock logged',
+                        'message' => 'User authenticated',
+                        'action' => $action,
+                        'user' => $userName
+                    ]);
+
+                case 'door_unlocked':
+                    // Door unlocked after authentication
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'System');
+                    
+                    $this->logAccessAttempt(
+                        $userName,
+                        'door_unlock',
+                        'success',
+                        $user ? $user->role : 'user',
+                        $device
+                    );
+                    
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Door unlocked',
+                        'action' => $action,
+                        'user' => $userName
+                    ]);
+
+                case 'door_locked':
+                    // Door locked after transaction
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'System');
+                    
+                    $this->logAccessAttempt(
+                        $userName,
+                        'door_lock',
+                        'success',
+                        $user ? $user->role : 'user',
+                        $device
+                    );
+                    
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Door locked',
+                        'action' => $action,
+                        'user' => $userName
+                    ]);
+
+                case 'key_taken':
+                    // Key checked out
+                    if (empty($keyInfo)) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Key information required'
+                        ], 400);
+                    }
+
+                    // Find key by name first (ESP32 sends key name like "Key 1", "Key 2", etc.)
+                    // Then try by RFID UID if not found
+                    $labKey = LabKey::where('key_name', $keyInfo)->first();
+                    
+                    if (!$labKey) {
+                        // Try by RFID UID
+                        $labKey = LabKey::where('key_rfid_uid', strtoupper($keyInfo))->first();
+                    }
+                    
+                    if (!$labKey) {
+                        // Create new key if not exists (ESP32 sends key name, so use that)
+                        // Note: RFID UID will be updated when key is registered properly
+                        $labKey = LabKey::create([
+                            'key_name' => $keyInfo,
+                            'key_rfid_uid' => null, // Will be set when key is registered
+                            'description' => 'Auto-registered key from ESP32',
+                            'status' => 'checked_out'
+                        ]);
+                    } else {
+                        $labKey->update(['status' => 'checked_out']);
+                    }
+
+                    // Find user
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+
+                    // Create transaction
+                    $transaction = KeyTransaction::create([
+                        'lab_key_id' => $labKey->id,
+                        'user_name' => $userName,
+                        'user_rfid_uid' => $user && $user->rfid_uid ? strtoupper($user->rfid_uid) : (str_starts_with($userIdentifier, 'FP_') ? null : strtoupper($userIdentifier)),
+                        'user_fingerprint_id' => $user ? $user->fingerprint_id : (str_starts_with($userIdentifier, 'FP_') ? (int) str_replace('FP_', '', $userIdentifier) : null),
+                        'action' => 'checkout',
+                        'transaction_time' => now(),
+                        'device' => $device
+                    ]);
+
+                    // Log the event
+                    $this->logAccessAttempt(
+                        $userName,
+                        'key_checkout',
+                        'success',
+                        $user ? $user->role : 'user',
+                        $device,
+                        $labKey->id,
+                        $labKey->key_name
+                    );
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => "Key {$labKey->key_name} checked out",
+                        'key' => $labKey->key_name,
+                        'action' => 'checkout',
+                        'transaction_id' => $transaction->id
+                    ]);
+
+                case 'key_returned':
+                    // Key checked in
+                    if (empty($keyInfo)) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Key information required'
+                        ], 400);
+                    }
+
+                    // Find key by name first (ESP32 sends key name)
+                    // Then try by RFID UID if not found
+                    $labKey = LabKey::where('key_name', $keyInfo)->first();
+                    
+                    if (!$labKey) {
+                        // Try by RFID UID
+                        $labKey = LabKey::where('key_rfid_uid', strtoupper($keyInfo))->first();
+                    }
+                    
+                    if (!$labKey) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Key not found. Key must be registered before it can be returned.'
+                        ], 404);
+                    }
+
+                    // Update key status
+                    $labKey->update(['status' => 'available']);
+
+                    // Find user
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+
+                    // Create transaction
+                    $transaction = KeyTransaction::create([
+                        'lab_key_id' => $labKey->id,
+                        'user_name' => $userName,
+                        'user_rfid_uid' => $user && $user->rfid_uid ? strtoupper($user->rfid_uid) : (str_starts_with($userIdentifier, 'FP_') ? null : strtoupper($userIdentifier)),
+                        'user_fingerprint_id' => $user ? $user->fingerprint_id : (str_starts_with($userIdentifier, 'FP_') ? (int) str_replace('FP_', '', $userIdentifier) : null),
+                        'action' => 'checkin',
+                        'transaction_time' => now(),
+                        'device' => $device
+                    ]);
+
+                    // Log the event
+                    $this->logAccessAttempt(
+                        $userName,
+                        'key_checkin',
+                        'success',
+                        $user ? $user->role : 'user',
+                        $device,
+                        $labKey->id,
+                        $labKey->key_name
+                    );
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => "Key {$labKey->key_name} returned",
+                        'key' => $labKey->key_name,
+                        'action' => 'checkin',
+                        'transaction_id' => $transaction->id
+                    ]);
+
+                case 'unknown_key_tag':
+                    // Unknown key tag detected
+                    $alert = SystemAlert::create([
+                        'device' => $device,
+                        'alert_type' => 'unauthorized_access',
+                        'severity' => 'medium',
+                        'title' => 'Unknown Key Tag Detected',
+                        'description' => "Unknown key tag detected: {$keyInfo}",
+                        'user_name' => $userIdentifier ?: 'Unknown',
+                        'alert_time' => now(),
+                        'status' => 'active'
+                    ]);
+
+                    $this->logAccessAttempt(
+                        $userIdentifier ?: 'Unknown',
+                        'unknown_key_tag',
+                        'denied',
+                        'guest',
+                        $device
+                    );
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Unknown key tag alert created',
+                        'alert_id' => $alert->id,
                         'action' => $action
                     ]);
 
-                case 'fingerprint_match':
-                    // Log fingerprint authentication
+                case 'door_timeout':
+                    // Door left open timeout
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'System');
+                    
+                    $alert = SystemAlert::create([
+                        'device' => $device,
+                        'alert_type' => 'door_left_open',
+                        'severity' => 'high',
+                        'title' => 'Door Timeout Alert',
+                        'description' => 'Door was left open for more than 20 seconds or key tag was not scanned',
+                        'user_name' => $userName,
+                        'alert_time' => now(),
+                        'status' => 'active'
+                    ]);
+
                     $this->logAccessAttempt(
-                        'Fingerprint User',
-                        'fingerprint',
+                        $userName,
+                        'alert_timeout',
+                        'denied',
+                        $user ? $user->role : 'system',
+                        $device
+                    );
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Timeout alert created',
+                        'alert_id' => $alert->id,
+                        'action' => $action
+                    ]);
+
+                // Legacy action names for backward compatibility
+                case 'fingerprint_match':
+                    // Map to user_authenticated
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+                    $authType = str_starts_with($userIdentifier, 'FP_') ? 'fingerprint' : 'rfid';
+                    
+                    $this->logAccessAttempt(
+                        $userName,
+                        $authType,
                         'success',
-                        'user',
+                        $user ? $user->role : 'user',
                         $device
                     );
                     
                     return response()->json([
                         'status' => 'success',
-                        'message' => 'Fingerprint match logged',
-                        'action' => $action
+                        'message' => 'User authenticated',
+                        'action' => 'user_authenticated',
+                        'user' => $userName
                     ]);
 
                 case 'key_tagged_taken':
-                    // Handle key checkout
-                    $keyRfidUid = $extra;
-                    
+                    // Map to key_taken
+                    $keyRfidUid = $keyInfo ?: $userIdentifier;
                     if (empty($keyRfidUid)) {
                         return response()->json([
                             'status' => 'error',
@@ -552,13 +830,13 @@ class IoTController extends Controller
                         ], 400);
                     }
 
-                    // Find the key
-                    $labKey = LabKey::where('key_rfid_uid', strtoupper($keyRfidUid))->first();
+                    $labKey = LabKey::where('key_name', $keyRfidUid)
+                                   ->orWhere('key_rfid_uid', strtoupper($keyRfidUid))
+                                   ->first();
                     
                     if (!$labKey) {
-                        // Create new key if not exists
                         $labKey = LabKey::create([
-                            'key_name' => 'Key ' . strtoupper($keyRfidUid),
+                            'key_name' => $keyRfidUid,
                             'key_rfid_uid' => strtoupper($keyRfidUid),
                             'description' => 'Auto-registered key',
                             'status' => 'checked_out'
@@ -567,21 +845,24 @@ class IoTController extends Controller
                         $labKey->update(['status' => 'checked_out']);
                     }
 
-                    // Create transaction
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+
                     $transaction = KeyTransaction::create([
                         'lab_key_id' => $labKey->id,
-                        'user_name' => 'Unknown User', // Will be updated if user info available
+                        'user_name' => $userName,
+                        'user_rfid_uid' => $user && $user->rfid_uid ? strtoupper($user->rfid_uid) : (str_starts_with($userIdentifier, 'FP_') ? null : strtoupper($userIdentifier)),
+                        'user_fingerprint_id' => $user ? $user->fingerprint_id : (str_starts_with($userIdentifier, 'FP_') ? (int) str_replace('FP_', '', $userIdentifier) : null),
                         'action' => 'checkout',
                         'transaction_time' => now(),
                         'device' => $device
                     ]);
 
-                    // Log the event
                     $this->logAccessAttempt(
-                        'Unknown User',
+                        $userName,
                         'key_checkout',
                         'success',
-                        'user',
+                        $user ? $user->role : 'user',
                         $device,
                         $labKey->id,
                         $labKey->key_name
@@ -596,9 +877,8 @@ class IoTController extends Controller
                     ]);
 
                 case 'key_tagged_returned':
-                    // Handle key checkin
-                    $keyRfidUid = $extra;
-                    
+                    // Map to key_returned
+                    $keyRfidUid = $keyInfo ?: $userIdentifier;
                     if (empty($keyRfidUid)) {
                         return response()->json([
                             'status' => 'error',
@@ -606,8 +886,9 @@ class IoTController extends Controller
                         ], 400);
                     }
 
-                    // Find the key
-                    $labKey = LabKey::where('key_rfid_uid', strtoupper($keyRfidUid))->first();
+                    $labKey = LabKey::where('key_name', $keyRfidUid)
+                                   ->orWhere('key_rfid_uid', strtoupper($keyRfidUid))
+                                   ->first();
                     
                     if (!$labKey) {
                         return response()->json([
@@ -616,24 +897,26 @@ class IoTController extends Controller
                         ], 404);
                     }
 
-                    // Update key status
                     $labKey->update(['status' => 'available']);
 
-                    // Create transaction
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'Unknown User');
+
                     $transaction = KeyTransaction::create([
                         'lab_key_id' => $labKey->id,
-                        'user_name' => 'Unknown User',
+                        'user_name' => $userName,
+                        'user_rfid_uid' => $user && $user->rfid_uid ? strtoupper($user->rfid_uid) : (str_starts_with($userIdentifier, 'FP_') ? null : strtoupper($userIdentifier)),
+                        'user_fingerprint_id' => $user ? $user->fingerprint_id : (str_starts_with($userIdentifier, 'FP_') ? (int) str_replace('FP_', '', $userIdentifier) : null),
                         'action' => 'checkin',
                         'transaction_time' => now(),
                         'device' => $device
                     ]);
 
-                    // Log the event
                     $this->logAccessAttempt(
-                        'Unknown User',
+                        $userName,
                         'key_checkin',
                         'success',
-                        'user',
+                        $user ? $user->role : 'user',
                         $device,
                         $labKey->id,
                         $labKey->key_name
@@ -648,23 +931,26 @@ class IoTController extends Controller
                     ]);
 
                 case 'door_timeout_alert':
-                    // Create alert for door left open
+                    // Map to door_timeout
+                    $user = $findUser($userIdentifier);
+                    $userName = $user ? $user->name : ($userIdentifier ?: 'System');
+                    
                     $alert = SystemAlert::create([
                         'device' => $device,
                         'alert_type' => 'door_left_open',
                         'severity' => 'high',
                         'title' => 'Door Timeout Alert',
                         'description' => 'Door was left open for more than 20 seconds or key tag was not scanned',
+                        'user_name' => $userName,
                         'alert_time' => now(),
                         'status' => 'active'
                     ]);
 
-                    // Log as access event
                     $this->logAccessAttempt(
-                        'System',
+                        $userName,
                         'alert_timeout',
                         'denied',
-                        'system',
+                        $user ? $user->role : 'system',
                         $device
                     );
 
@@ -672,7 +958,7 @@ class IoTController extends Controller
                         'status' => 'success',
                         'message' => 'Timeout alert created',
                         'alert_id' => $alert->id,
-                        'action' => $action
+                        'action' => 'door_timeout'
                     ]);
 
                 default:
@@ -691,7 +977,25 @@ class IoTController extends Controller
                         'action' => $action
                     ]);
             }
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::warning('ESP32 event validation failed', [
+                'action' => $action,
+                'errors' => $e->errors(),
+                'request' => $request->all()
+            ]);
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed: ' . $e->getMessage(),
+                'errors' => $e->errors(),
+                'action' => $action
+            ], 422);
         } catch (\Exception $e) {
+            Log::error('ESP32 event processing failed', [
+                'action' => $action,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all()
+            ]);
             return response()->json([
                 'status' => 'error',
                 'message' => 'Event processing failed: ' . $e->getMessage(),
@@ -703,23 +1007,94 @@ class IoTController extends Controller
     /**
      * Handle photo upload from ESP32-CAM
      * Endpoint: POST /api/intellilock/upload
+     * 
+     * ESP32-CAM sends raw binary JPEG data with Content-Type: image/jpeg
+     * or multipart/form-data with photo field
      */
     public function intellilockPhotoUpload(Request $request): JsonResponse
     {
-        $request->validate([
-            'photo' => 'required|file|image|max:5120', // Max 5MB
-            'event_type' => 'nullable|string'
-        ]);
-
         try {
-            $eventType = $request->event_type ?? 'access';
             $device = 'lab_key_box';
+            $eventType = 'access';
+            $imageData = null;
+            $extension = 'jpg';
+            
+            // Check if it's a multipart form upload (legacy support)
+            if ($request->hasFile('photo')) {
+                $request->validate([
+                    'photo' => 'required|file|image|max:5120', // Max 5MB
+                    'event_type' => 'nullable|string'
+                ]);
+                
+                $file = $request->file('photo');
+                $extension = $file->extension();
+                $imageData = file_get_contents($file->getRealPath());
+                $eventType = $request->event_type ?? 'access';
+            } else {
+                // Raw binary JPEG data from ESP32-CAM
+                // ESP32-CAM sends Content-Type: image/jpeg with binary body
+                $contentType = $request->header('Content-Type');
+                
+                // Accept image/jpeg, image/jpg, application/octet-stream, or empty (ESP32 might send different headers)
+                if (empty($contentType) || str_contains($contentType, 'image/jpeg') || str_contains($contentType, 'image/jpg') || str_contains($contentType, 'application/octet-stream')) {
+                    // Read raw binary data from request body
+                    $imageData = $request->getContent();
+                    
+                    if (empty($imageData)) {
+                        Log::warning('ESP32-CAM upload: No image data received', [
+                            'content_type' => $contentType,
+                            'content_length' => $request->header('Content-Length'),
+                            'method' => $request->method()
+                        ]);
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'No image data received'
+                        ], 400);
+                    }
+                    
+                    // Validate it's a JPEG by checking magic bytes
+                    if (strlen($imageData) < 2 || substr($imageData, 0, 2) !== "\xFF\xD8") {
+                        Log::warning('ESP32-CAM upload: Invalid JPEG format', [
+                            'first_bytes' => bin2hex(substr($imageData, 0, 10)),
+                            'size' => strlen($imageData)
+                        ]);
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Invalid JPEG format. Expected JPEG image data.'
+                        ], 400);
+                    }
+                    
+                    // Check file size (max 5MB)
+                    if (strlen($imageData) > 5 * 1024 * 1024) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Image too large (max 5MB)'
+                        ], 400);
+                    }
+                } else {
+                    Log::warning('ESP32-CAM upload: Invalid content type', [
+                        'content_type' => $contentType
+                    ]);
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Invalid content type. Expected image/jpeg or multipart/form-data. Received: ' . ($contentType ?: 'none')
+                    ], 400);
+                }
+            }
+            
+            if (empty($imageData)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No image data received'
+                ], 400);
+            }
             
             // Generate unique filename
-            $filename = time() . '_' . $device . '_' . uniqid() . '.' . $request->photo->extension();
+            $filename = time() . '_' . $device . '_' . uniqid() . '.' . $extension;
             
             // Store in public/storage/photos directory
-            $path = $request->photo->storeAs('photos', $filename, 'public');
+            $path = 'photos/' . $filename;
+            Storage::disk('public')->put($path, $imageData);
             
             // Get the most recent access log or transaction
             $recentAccessLog = AccessLog::where('device', $device)
@@ -747,10 +1122,115 @@ class IoTController extends Controller
                 'photo_url' => $eventPhoto->photo_url,
                 'filename' => $filename
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Validation failed: ' . $e->getMessage(),
+                'errors' => $e->errors()
+            ], 422);
         } catch (\Exception $e) {
+            Log::error('ESP32-CAM upload failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'status' => 'error',
                 'message' => 'Photo upload failed: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Handle smart key transaction from ESP32
+     * Endpoint: POST /api/intellilock/key-transaction
+     * 
+     * Automatically determines if this is a checkout or checkin based on key status
+     */
+    public function intellilockKeyTransaction(Request $request): JsonResponse
+    {
+        $request->validate([
+            'action' => 'required|string',
+            'key_rfid_uid' => 'required|string',
+            'user_rfid_uid' => 'nullable|string',
+            'user_fingerprint_id' => 'nullable|integer'
+        ]);
+
+        $device = 'lab_key_box';
+        $keyRfidUid = strtoupper($request->key_rfid_uid);
+
+        try {
+            // Find or create the key
+            $labKey = LabKey::where('key_rfid_uid', $keyRfidUid)->first();
+            
+            if (!$labKey) {
+                $labKey = LabKey::create([
+                    'key_name' => 'Key ' . substr($keyRfidUid, -4),
+                    'key_rfid_uid' => $keyRfidUid,
+                    'description' => 'Auto-registered key',
+                    'status' => 'available'
+                ]);
+            }
+
+            // Determine user
+            $user = null;
+            $userName = 'Unknown User';
+            
+            if ($request->user_rfid_uid) {
+                $user = User::where('rfid_uid', strtoupper($request->user_rfid_uid))->first();
+            } elseif ($request->user_fingerprint_id) {
+                $user = User::where('fingerprint_id', $request->user_fingerprint_id)->first();
+            }
+            
+            if ($user) {
+                $userName = $user->name;
+            }
+
+            // Determine action based on current key status
+            $action = $labKey->status === 'available' ? 'checkout' : 'checkin';
+            $newStatus = $action === 'checkout' ? 'checked_out' : 'available';
+
+            // Update key status
+            $labKey->update(['status' => $newStatus]);
+
+            // Create transaction
+            $transaction = KeyTransaction::create([
+                'lab_key_id' => $labKey->id,
+                'user_name' => $userName,
+                'user_rfid_uid' => $request->user_rfid_uid ? strtoupper($request->user_rfid_uid) : null,
+                'user_fingerprint_id' => $request->user_fingerprint_id,
+                'action' => $action,
+                'transaction_time' => now(),
+                'device' => $device
+            ]);
+
+            // Log the event
+            $this->logAccessAttempt(
+                $userName,
+                'key_' . $action,
+                'success',
+                $user ? $user->role : 'user',
+                $device,
+                $labKey->id,
+                $labKey->key_name
+            );
+
+            return response()->json([
+                'status' => 'success',
+                'message' => "Key {$labKey->key_name} {$action} by {$userName}",
+                'key' => [
+                    'id' => $labKey->id,
+                    'name' => $labKey->key_name,
+                    'rfid' => $labKey->key_rfid_uid,
+                    'status' => $newStatus
+                ],
+                'action' => $action,
+                'user' => $userName,
+                'transaction_id' => $transaction->id
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Transaction failed: ' . $e->getMessage()
             ], 500);
         }
     }

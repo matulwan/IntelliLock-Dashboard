@@ -5,6 +5,7 @@ use Inertia\Inertia;
 use App\Http\Controllers\UserManagementController;
 use App\Http\Controllers\AccessLogController;
 use App\Http\Controllers\OverviewController;
+use App\Http\Controllers\KeyManagementController;
 
 Route::get('/', function () {
     if (\Illuminate\Support\Facades\Auth::check()) {
@@ -23,9 +24,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     })->name('security-snaps');
     
     // Key Management System
-    Route::get('/key-management', function () {
-        return Inertia::render('key-management');
-    })->name('key-management');
+    Route::get('/key-management', [KeyManagementController::class, 'index'])->name('key-management');
 });
 
 Route::middleware(['auth'])->group(function () {

@@ -58,6 +58,9 @@ Route::prefix('intellilock')->group(function () {
     // Main event endpoint - matches your ESP32 sendEvent() function
     Route::post('/event', [IoTController::class, 'intellilockEvent']);
     
+    // Key transaction endpoint - handles checkout/checkin with user tracking
+    Route::post('/key-transaction', [IoTController::class, 'intellilockKeyTransaction']);
+    
     // Photo upload from ESP32-CAM (triggered by CAM_TRIGGER pin)
     Route::post('/upload', [IoTController::class, 'intellilockPhotoUpload']);
     
