@@ -55,6 +55,8 @@ Route::prefix('iot')->group(function () {
 // ==================== INTELLI-LOCK SPECIFIC ROUTES ====================
 // Routes matching your ESP32 code implementation
 Route::prefix('intellilock')->group(function () {
+    // Simple connectivity ping for ESP32 devices
+    Route::get('/ping', [IoTController::class, 'ping']);
     // Main event endpoint - matches your ESP32 sendEvent() function
     Route::post('/event', [IoTController::class, 'intellilockEvent']);
     
@@ -67,3 +69,7 @@ Route::prefix('intellilock')->group(function () {
     // Get current system state
     Route::get('/status', [IoTController::class, 'intellilockStatus']);
 });
+
+// ==================== KEY CHECK ENDPOINT ====================
+// ESP32 calls this to check if an RFID tag is a key
+Route::get('/keys/check', [IoTController::class, 'checkKeyTag']);

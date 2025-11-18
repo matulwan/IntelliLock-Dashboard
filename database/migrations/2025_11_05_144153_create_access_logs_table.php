@@ -11,15 +11,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // If the table already exists (as in current environment), skip creation to avoid errors.
-        if (Schema::hasTable('access_logs')) {
-            return;
-        }
-
         Schema::create('access_logs', function (Blueprint $table) {
             $table->id();
             $table->string('action');
-            // Align with code expecting relation: User::hasMany(AccessLog::class, 'user', 'name')
             $table->string('user')->nullable();
             $table->string('key_name')->nullable();
             $table->string('device')->default('main_controller');

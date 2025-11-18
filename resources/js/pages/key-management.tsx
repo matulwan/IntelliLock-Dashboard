@@ -1,23 +1,27 @@
-import React from 'react';
-import { Head } from '@inertiajs/react';
+import React, { useState, useEffect } from 'react';
+import { Head, router } from '@inertiajs/react';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { 
   Key, 
-  Wifi, 
-  WifiOff, 
   Users,
-  Clock,
   CheckCircle,
   AlertCircle,
-  Activity,
-  AlertTriangle,
-  ArrowDownCircle,
-  ArrowUpCircle
+  Edit,
+  Trash2,
+  MoreVertical,
+  RefreshCw
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface KeyBoxStatus {
   status: string;
@@ -98,45 +102,135 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
   recentTransactions,
   activeAlerts 
 }) => {
+  const [editingKey, setEditingKey] = useState<LabKey | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(new Date());
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'online':
-        return <Wifi className="h-4 w-4 text-green-500" />;
-      case 'offline':
-        return <WifiOff className="h-4 w-4 text-gray-500" />;
-      case 'error':
-        return <AlertTriangle className="h-4 w-4 text-red-500" />;
-      default:
-        return <WifiOff className="h-4 w-4 text-gray-400" />;
-    }
-  };
+  // Auto-refresh every 3 seconds for real-time updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshData();
+    }, 3000); // Refresh every 3 seconds
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'online':
-        return <Badge className="bg-green-100 text-green-800">Online</Badge>;
-      case 'offline':
-        return <Badge className="bg-gray-100 text-gray-800">Offline</Badge>;
-      case 'error':
-        return <Badge className="bg-red-100 text-red-800">Error</Badge>;
-      default:
-        return <Badge className="bg-gray-100 text-gray-800">Unknown</Badge>;
-    }
+    return () => clearInterval(interval);
+  }, []);
+
+  const refreshData = () => {
+    if (isRefreshing) return;
+    
+    setIsRefreshing(true);
+    router.reload({
+      preserveScroll: true,
+      preserveState: true,
+      onFinish: () => {
+        setIsRefreshing(false);
+        setLastUpdate(new Date());
+      }
+    });
   };
 
   const getKeyStatusBadge = (status: string) => {
-    return status === 'available' ? (
-      <Badge className="bg-green-100 text-green-800">
-        <CheckCircle className="h-3 w-3 mr-1" />
-        Available
-      </Badge>
-    ) : (
-      <Badge className="bg-orange-100 text-orange-800">
-        <AlertCircle className="h-3 w-3 mr-1" />
-        Checked Out
-      </Badge>
-    );
+    if (status === 'available') {
+      return (
+        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+          <CheckCircle className="h-3 w-3 mr-1" />
+          Available
+        </Badge>
+      );
+    } else if (status === 'checked_out') {
+      return (
+        <Badge className="bg-orange-100 text-orange-800 hover:bg-orange-100">
+          <AlertCircle className="h-3 w-3 mr-1" />
+          Checked Out
+        </Badge>
+      );
+    } else {
+      return (
+        <Badge className="bg-gray-100 text-gray-800 hover:bg-gray-100">
+          <AlertCircle className="h-3 w-3 mr-1" />
+          {status}
+        </Badge>
+      );
+    }
+  };
+
+  // Edit key function
+  const handleEditKey = (key: LabKey) => {
+    setEditingKey(key);
+
+    const keyName = window.prompt('Key name', key.name);
+    if (keyName === null) {
+      setEditingKey(null);
+      return;
+    }
+
+    const description = window.prompt('Description', key.description || '');
+    if (description === null) {
+      setEditingKey(null);
+      return;
+    }
+
+    const location = window.prompt('Location', key.location || '');
+    if (location === null) {
+      setEditingKey(null);
+      return;
+    }
+
+    const status = window.prompt('Status (available / checked_out)', key.status);
+    if (status === null) {
+      setEditingKey(null);
+      return;
+    }
+
+    const normalizedStatus = status.trim().toLowerCase();
+    if (!['available', 'checked_out'].includes(normalizedStatus)) {
+      alert('Status must be "available" or "checked_out".');
+      setEditingKey(null);
+      return;
+    }
+
+    const rfid = window.prompt('RFID UID (leave blank to unset)', key.rfid || '') || '';
+
+    router.put(route('key-management.update', key.id), {
+      key_name: keyName.trim(),
+      description: description.trim() || null,
+      location: location.trim() || null,
+      status: normalizedStatus,
+      key_rfid_uid: rfid.trim() || null,
+    }, {
+      preserveScroll: true,
+      onSuccess: () => {
+        setEditingKey(null);
+        refreshData(); // Refresh after edit
+      },
+      onError: () => setEditingKey(null),
+    });
+  };
+
+  // Delete key function
+  const handleDeleteKey = (keyId: number) => {
+    if (deleteConfirm === keyId) {
+      router.delete(route('key-management.destroy', keyId), {
+        preserveScroll: true,
+        onSuccess: () => {
+          setDeleteConfirm(null);
+          refreshData(); // Refresh after delete
+        },
+        onError: () => setDeleteConfirm(null),
+      });
+    } else {
+      setDeleteConfirm(keyId);
+      // Auto-cancel delete confirmation after 3 seconds
+      setTimeout(() => {
+        setDeleteConfirm(null);
+      }, 3000);
+    }
+  };
+
+  // Cancel delete confirmation
+  const cancelDelete = () => {
+    setDeleteConfirm(null);
   };
 
   return (
@@ -161,7 +255,21 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
           >
             Key Management
           </motion.h1>
-          {getStatusBadge(keyBoxStatus.status)}
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-muted-foreground">
+              Last updated: {lastUpdate.toLocaleTimeString()}
+            </div>
+            <Button 
+              onClick={refreshData}
+              variant="outline"
+              size="sm"
+              disabled={isRefreshing}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Refreshing...' : 'Refresh'}
+            </Button>
+          </div>
         </motion.div>
 
         {/* Stats Cards */}
@@ -174,6 +282,7 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{keyBoxStatus.totalKeys}</div>
+                <p className="text-xs text-muted-foreground">Registered in system</p>
               </CardContent>
             </Card>
           </motion.div>
@@ -186,6 +295,7 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-green-600">{keyBoxStatus.availableKeys}</div>
+                <p className="text-xs text-muted-foreground">Ready for checkout</p>
               </CardContent>
             </Card>
           </motion.div>
@@ -198,16 +308,27 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-orange-600">{keyBoxStatus.checkedOutKeys}</div>
+                <p className="text-xs text-muted-foreground">Currently checked out</p>
               </CardContent>
             </Card>
           </motion.div>
         </motion.div>
 
         {/* Keys List */}
-        <motion.div variants={item} whileHover={cardHover}>
+        <motion.div variants={item}>
           <Card>
-            <CardHeader>
-              <CardTitle>Lab Keys</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Lab Keys ({labKeys.length})</CardTitle>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  Available: {keyBoxStatus.availableKeys}
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                  Checked Out: {keyBoxStatus.checkedOutKeys}
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
             {labKeys.length === 0 ? (
@@ -217,14 +338,19 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
                 <p className="text-sm">Keys will appear here when they are scanned</p>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {labKeys.map((key) => (
-                  <div key={key.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className={`p-2 rounded-lg ${
+                  <motion.div 
+                    key={key.id} 
+                    className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors group"
+                    whileHover={{ scale: 1.01 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <div className="flex items-center gap-4 flex-1">
+                      <div className={`p-3 rounded-lg ${
                         key.status === 'available' 
-                          ? 'bg-green-100' 
-                          : 'bg-orange-100'
+                          ? 'bg-green-100 border border-green-200' 
+                          : 'bg-orange-100 border border-orange-200'
                       }`}>
                         <Key className={`h-5 w-5 ${
                           key.status === 'available' 
@@ -232,23 +358,86 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
                             : 'text-orange-600'
                         }`} />
                       </div>
-                      <div>
-                        <h3 className="font-semibold">{key.name}</h3>
-                        <p className="text-sm text-muted-foreground">{key.description}</p>
-                        <p className="text-xs text-muted-foreground font-mono">RFID: {key.rfid}</p>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-semibold truncate">{key.name}</h3>
+                          {getKeyStatusBadge(key.status)}
+                        </div>
+                        {key.description && (
+                          <p className="text-sm text-muted-foreground mb-1">{key.description}</p>
+                        )}
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          <span className="font-mono bg-gray-100 px-2 py-1 rounded">
+                            RFID: {key.rfid || 'Not set'}
+                          </span>
+                          <span>Location: {key.location}</span>
+                        </div>
+                        {key.status === 'checked_out' && key.holder && key.holder !== 'Available' && (
+                          <div className="flex items-center gap-1 mt-2 text-sm">
+                            <Users className="h-3 w-3 text-orange-500" />
+                            <span className="text-orange-600 font-medium">Held by: {key.holder}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     
-                    <div className="text-right">
-                      {getKeyStatusBadge(key.status)}
-                      {key.status === 'checked_out' && key.holder && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          <Users className="h-3 w-3 inline mr-1" />
-                          {key.holder}
-                        </p>
+                    <div className="flex items-center gap-3">
+                      {/* Edit/Delete Dropdown */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <MoreVertical className="h-4 w-4" />
+                            <span className="sr-only">Open menu</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem 
+                            onClick={() => handleEditKey(key)}
+                            className="flex items-center gap-2 cursor-pointer"
+                            disabled={editingKey !== null}
+                          >
+                            <Edit className="h-4 w-4" />
+                            Edit Key
+                          </DropdownMenuItem>
+                          <DropdownMenuItem 
+                            onClick={() => handleDeleteKey(key.id)}
+                            className="flex items-center gap-2 text-red-600 cursor-pointer"
+                            disabled={deleteConfirm !== null}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete Key
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      {/* Delete Confirmation */}
+                      {deleteConfirm === key.id && (
+                        <motion.div 
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-2"
+                        >
+                          <span className="text-sm text-red-700 font-medium">Delete?</span>
+                          <Button 
+                            variant="destructive" 
+                            size="sm" 
+                            onClick={() => handleDeleteKey(key.id)}
+                            className="h-6 px-2 text-xs"
+                          >
+                            Yes
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={cancelDelete}
+                            className="h-6 px-2 text-xs"
+                          >
+                            No
+                          </Button>
+                        </motion.div>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             )}
@@ -257,47 +446,47 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
         </motion.div>
 
         {/* Recent Transactions */}
-        <motion.div variants={item} whileHover={cardHover}>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5" />
-                Recent Transactions
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {recentTransactions.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Activity className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                  <p>No transactions yet</p>
-                </div>
-              ) : (
+        {recentTransactions.length > 0 && (
+          <motion.div variants={item}>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  Recent Transactions
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
                 <div className="space-y-3">
                   {recentTransactions.map((transaction) => (
                     <div key={transaction.id} className="flex items-center justify-between p-3 border rounded-lg">
                       <div className="flex items-center gap-3">
-                        {transaction.action === 'checkout' ? (
-                          <ArrowDownCircle className="h-5 w-5 text-orange-500" />
-                        ) : (
-                          <ArrowUpCircle className="h-5 w-5 text-green-500" />
-                        )}
+                        <div className={`p-2 rounded-full ${
+                          transaction.action === 'checkout' 
+                            ? 'bg-orange-100 text-orange-600' 
+                            : 'bg-green-100 text-green-600'
+                        }`}>
+                          {transaction.action === 'checkout' ? (
+                            <span className="text-sm font-bold">→</span>
+                          ) : (
+                            <span className="text-sm font-bold">←</span>
+                          )}
+                        </div>
                         <div>
-                          <p className="font-medium">{transaction.key_name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {transaction.action === 'checkout' ? 'Checked out' : 'Returned'} by {transaction.user_name}
+                          <p className="font-medium">
+                            {transaction.key_name} - {transaction.user_name}
+                          </p>
+                          <p className="text-sm text-muted-foreground capitalize">
+                            {transaction.action} • {transaction.time}
                           </p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm text-muted-foreground">{transaction.time}</p>
-                      </div>
+                      <p className="text-sm text-muted-foreground">{transaction.formatted_time}</p>
                     </div>
                   ))}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         {/* Active Alerts */}
         {activeAlerts.length > 0 && (
@@ -305,7 +494,6 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
             <Card className="border-orange-200 bg-orange-50">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-orange-900">
-                  <AlertTriangle className="h-5 w-5" />
                   Active Alerts
                 </CardTitle>
               </CardHeader>
@@ -325,10 +513,10 @@ const KeyManagementPage: React.FC<KeyManagementPageProps> = ({
                         <p className="text-xs text-muted-foreground mt-1">{alert.time}</p>
                       </div>
                       <Badge className={`${
-                        alert.severity === 'critical' ? 'bg-red-100 text-red-800' :
-                        alert.severity === 'high' ? 'bg-orange-100 text-orange-800' :
-                        alert.severity === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-blue-100 text-blue-800'
+                        alert.severity === 'critical' ? 'bg-red-100 text-red-800 hover:bg-red-100' :
+                        alert.severity === 'high' ? 'bg-orange-100 text-orange-800 hover:bg-orange-100' :
+                        alert.severity === 'medium' ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100' :
+                        'bg-blue-100 text-blue-800 hover:bg-blue-100'
                       }`}>
                         {alert.severity}
                       </Badge>

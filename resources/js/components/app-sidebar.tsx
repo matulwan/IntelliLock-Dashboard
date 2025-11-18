@@ -4,7 +4,7 @@ import { NavUser } from '@/components/nav-user';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { type NavItem } from '@/types';
 import { Link } from '@inertiajs/react';
-import { BookOpen, Cctv, ChartNoAxesCombined, FileText, Folder, UserRoundPen, Wifi, Users } from 'lucide-react';
+import { BookOpen, Cctv, ChartNoAxesCombined, FileText, Folder, UserRoundPen, Wifi, Users, Cpu } from 'lucide-react';
 import AppLogo from './app-logo';
 
 const mainNavItems: NavItem[] = [
@@ -32,6 +32,11 @@ const mainNavItems: NavItem[] = [
         title: 'Security Snaps',
         href: '/security-snaps',
         icon: Cctv,
+    },
+    {
+        title: 'Devices', // Add this line
+        href: '/devices',
+        icon: Cpu, // Using the Cpu icon for devices
     },
 ];
 

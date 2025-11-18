@@ -9,23 +9,23 @@ class LabKey extends Model
 {
     use HasFactory;
 
-    protected $table = 'lab_keys';
-
     protected $fillable = [
         'key_name',
-        'key_rfid_uid',
-        'description',
-        'status',
+        'description', 
         'location',
-        'is_active'
+        'status',
+        'key_rfid_uid', // This is the field name in your database
+        'is_active',
+        'last_used_at'
     ];
 
     protected $casts = [
+        'last_used_at' => 'datetime',
         'is_active' => 'boolean'
     ];
 
     /**
-     * Get all transactions for this key
+     * Get the current transactions for this key
      */
     public function transactions()
     {
@@ -33,7 +33,7 @@ class LabKey extends Model
     }
 
     /**
-     * Get the latest transaction
+     * Get the latest transaction for this key
      */
     public function latestTransaction()
     {
@@ -41,32 +41,28 @@ class LabKey extends Model
     }
 
     /**
-     * Get current holder of the key
+     * Get the current holder of the key
      */
     public function getCurrentHolder()
     {
-        $latestCheckout = $this->transactions()
+        $lastCheckout = $this->transactions()
             ->where('action', 'checkout')
             ->latest('transaction_time')
             ->first();
 
-        if (!$latestCheckout) return null;
+        if ($lastCheckout) {
+            $lastCheckin = $this->transactions()
+                ->where('action', 'checkin')
+                ->where('transaction_time', '>', $lastCheckout->transaction_time)
+                ->latest('transaction_time')
+                ->first();
 
-        // Check if key was returned after this checkout
-        $returnAfterCheckout = $this->transactions()
-            ->where('action', 'checkin')
-            ->where('transaction_time', '>', $latestCheckout->transaction_time)
-            ->exists();
+            if (!$lastCheckin) {
+                return $lastCheckout->user_name;
+            }
+        }
 
-        return $returnAfterCheckout ? null : $latestCheckout->user_name;
-    }
-
-    /**
-     * Check if key is currently available
-     */
-    public function isAvailable(): bool
-    {
-        return $this->status === 'available' && $this->getCurrentHolder() === null;
+        return 'Available';
     }
 
     /**
@@ -74,7 +70,7 @@ class LabKey extends Model
      */
     public function scopeAvailable($query)
     {
-        return $query->where('status', 'available')->where('is_active', true);
+        return $query->where('status', 'available');
     }
 
     /**
@@ -83,5 +79,13 @@ class LabKey extends Model
     public function scopeCheckedOut($query)
     {
         return $query->where('status', 'checked_out');
+    }
+
+    /**
+     * Scope for active keys
+     */
+    public function scopeActive($query)
+    {
+        return $query->where('is_active', true);
     }
 }

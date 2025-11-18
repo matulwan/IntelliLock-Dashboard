@@ -6,6 +6,9 @@ use App\Models\LabKey;
 use App\Models\KeyTransaction;
 use App\Models\IoTDevice;
 use App\Models\SystemAlert;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -97,5 +100,42 @@ class KeyManagementController extends Controller
             'recentTransactions' => $recentTransactions,
             'activeAlerts' => $activeAlerts
         ]);
+    }
+    /**
+     * Update the specified key
+     */
+    public function update(Request $request, LabKey $labKey): RedirectResponse
+    {
+        $validated = $request->validate([
+            'key_name' => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:255'],
+            'location' => ['nullable', 'string', 'max:255'],
+            'status' => ['required', Rule::in(['available', 'checked_out'])],
+            'key_rfid_uid' => ['nullable', 'string', Rule::unique('lab_keys', 'key_rfid_uid')->ignore($labKey->id)],
+        ]);
+
+        $labKey->update([
+            'key_name' => $validated['key_name'],
+            'description' => $validated['description'] ?? null,
+            'location' => $validated['location'] ?? $labKey->location,
+            'status' => $validated['status'],
+            'key_rfid_uid' => $validated['key_rfid_uid'] ?? null,
+        ]);
+
+        return redirect()
+            ->route('key-management')
+            ->with('success', 'Key updated successfully.');
+    }
+
+    /**
+     * Remove the specified key
+     */
+    public function destroy(LabKey $labKey): RedirectResponse
+    {
+        $labKey->update(['is_active' => false]);
+
+        return redirect()
+            ->route('key-management')
+            ->with('success', 'Key deleted successfully.');
     }
 }

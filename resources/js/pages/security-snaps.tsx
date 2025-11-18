@@ -1,9 +1,9 @@
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head } from '@inertiajs/react';
+import { Head, router } from '@inertiajs/react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Video, Wifi, WifiOff } from 'lucide-react';
+import { Video, Wifi, WifiOff, Search, Filter, Clock } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
 
@@ -20,53 +20,98 @@ const container = {
     show: {
         opacity: 1,
         transition: {
-            staggerChildren: 0.1,
+            staggerChildren: 0.05,
         },
     },
 };
 
 const item = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0, transition: { duration: 0.5 } },
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.3 } },
 };
 
 const cardHover = {
-    scale: 1.02,
-    transition: { duration: 0.3 },
+    scale: 1.05,
+    transition: { duration: 0.2 },
 };
 
 const imageHover = {
-    scale: 1.05,
+    scale: 1.1,
     transition: { duration: 0.3 },
 };
 
-// Mock for security snaps
-const securitySnaps = [
-    { url: 'https://placekitten.com/320/240', time: '2024-01-16 09:40' },
-    { url: 'https://placekitten.com/321/240', time: '2024-01-16 08:55' },
-    { url: 'https://placekitten.com/322/240', time: '2024-01-16 08:10' },
-    { url: 'https://placekitten.com/323/240', time: '2024-01-16 07:30' },
-    { url: 'https://placekitten.com/324/240', time: '2024-01-16 06:50' },
-    { url: 'https://placekitten.com/325/240', time: '2024-01-16 06:15' },
-    { url: 'https://placekitten.com/326/240', time: '2024-01-16 05:40' },
-    { url: 'https://placekitten.com/327/240', time: '2024-01-16 05:10' },
-];
+interface Photo {
+    id: number;
+    url: string;
+    time: string;
+    time_ago: string;
+    event_type: string;
+    device: string;
+    notes: string | null;
+    user: string;
+}
 
-export default function SecuritySnaps() {
-    const [searchTerm, setSearchTerm] = useState('');
-    const [selectedTime, setSelectedTime] = useState('all');
+interface Stats {
+    total: number;
+    today: number;
+    last_snap_time: string | null;
+    last_snap_ago: string | null;
+}
+
+interface Device {
+    status: string;
+    last_seen: string | null;
+}
+
+interface Filters {
+    device: string;
+    filter: string;
+    search: string;
+}
+
+interface Props {
+    photos: Photo[];
+    stats: Stats;
+    device: Device;
+    filters: Filters;
+}
+
+export default function SecuritySnaps({ photos, stats, device, filters: initialFilters }: Props) {
+    const [searchTerm, setSearchTerm] = useState(initialFilters.search || '');
+    const [selectedTime, setSelectedTime] = useState(initialFilters.filter || 'all');
     
-    // Quick stats
-    const totalSnaps = securitySnaps.length;
-    const lastSnapTime = securitySnaps[0]?.time || '-';
+    // Apply filters with debounce
+    const handleSearch = (value: string) => {
+        setSearchTerm(value);
+        router.get(route('security-snaps'), {
+            ...initialFilters,
+            search: value,
+            filter: selectedTime,
+        }, {
+            preserveState: true,
+            preserveScroll: true,
+        });
+    };
 
-    // Filter snaps based on search and time selection
-    const filteredSnaps = securitySnaps.filter(snap => {
-        const matchesSearch = snap.time.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesTime = selectedTime === 'all' || 
-                          (selectedTime === 'recent' && snap.time === securitySnaps[0].time) ||
-                          (selectedTime === 'today' && snap.time.includes('2024-01-16'));
-        return matchesSearch && matchesTime;
+    const handleFilterChange = (value: string) => {
+        setSelectedTime(value);
+        router.get(route('security-snaps'), {
+            ...initialFilters,
+            search: searchTerm,
+            filter: value,
+        }, {
+            preserveState: true,
+            preserveScroll: true,
+        });
+    };
+
+    // Filter snaps client-side for instant feedback (optional)
+    const filteredSnaps = photos.filter(photo => {
+        const matchesSearch = !searchTerm || 
+            photo.time.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            photo.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            photo.event_type.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesSearch;
     });
 
     return (
@@ -76,118 +121,138 @@ export default function SecuritySnaps() {
                 initial="hidden"
                 animate="show"
                 variants={container}
-                className="flex flex-col h-full gap-4 p-6"
+                className="flex flex-col h-full gap-3 p-3 md:p-4"
             >
-                {/* Quick Stats Row */}
-                <motion.div variants={item} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">
+                {/* Quick Stats Row - Compact */}
+                <motion.div variants={item} className="grid grid-cols-3 gap-2 mb-1">
                     <motion.div whileHover={cardHover}>
-                        <Card className="col-span-1 flex flex-row items-center gap-4 p-4 shadow-none border">
-                            <div className="flex items-center gap-2">
-                                <Video className="h-5 w-5 text-blue-600" />
-                                <span className="text-xs font-medium text-muted-foreground">Total Snaps</span>
+                        <Card className="p-2 shadow-none border">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1">
+                                    <Video className="h-3 w-3 text-blue-600" />
+                                    <span className="text-xs text-muted-foreground">Total</span>
+                                </div>
+                                <span className="text-sm font-bold text-blue-700">
+                                    {stats.total}
+                                </span>
                             </div>
-                            <motion.span 
-                                className="ml-auto text-lg font-bold text-blue-700"
-                                initial={{ scale: 0.8 }}
-                                animate={{ scale: 1 }}
-                                transition={{ type: 'spring', stiffness: 500 }}
-                            >
-                                {totalSnaps}
-                            </motion.span>
                         </Card>
                     </motion.div>
 
                     <motion.div whileHover={cardHover}>
-                        <Card className="col-span-1 flex flex-row items-center gap-4 p-4 shadow-none border">
-                            <div className="flex items-center gap-2">
-                                <Wifi className="h-5 w-5 text-green-600" />
-                                <span className="text-xs font-medium text-muted-foreground">Last Active</span>
+                        <Card className="p-2 shadow-none border">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1">
+                                    <Wifi className={`h-3 w-3 ${device.status === 'online' ? 'text-green-600' : 'text-gray-400'}`} />
+                                    <span className="text-xs text-muted-foreground">Status</span>
+                                </div>
+                                <span className="text-xs font-medium text-muted-foreground">
+                                    {device.status === 'online' ? 'Online' : 'Online'}
+                                </span>
                             </div>
-                            <span className="ml-auto text-xs font-medium text-muted-foreground">{lastSnapTime}</span>
                         </Card>
                     </motion.div>
 
                     <motion.div whileHover={cardHover}>
-                        <Card className="col-span-1 flex flex-row items-center gap-4 p-4 shadow-none border">
-                            <div className="flex items-center gap-2">
-                                <WifiOff className="h-5 w-5 text-red-600" />
-                                <span className="text-xs font-medium text-muted-foreground">Offline Since</span>
+                        <Card className="p-2 shadow-none border">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1">
+                                    <Clock className="h-3 w-3 text-orange-600" />
+                                    <span className="text-xs text-muted-foreground">Last</span>
+                                </div>
+                                <span className="text-xs font-medium text-muted-foreground text-right truncate">
+                                    {stats.last_snap_ago || '-'}
+                                </span>
                             </div>
-                            <span className="ml-auto text-xs font-medium text-muted-foreground">-</span>
                         </Card>
                     </motion.div>
                 </motion.div>
 
-                {/* Controls */}
-                <motion.div variants={item} className="flex gap-4">
+                {/* Controls - Compact */}
+                <motion.div variants={item} className="flex flex-col sm:flex-row gap-2">
                     <motion.div 
                         whileHover={{ scale: 1.01 }} 
-                        className="relative flex-1 max-w-md"
+                        className="relative flex-1"
                     >
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                         <input
                             type="text"
-                            placeholder="Search by timestamp..."
-                            className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Search snaps..."
+                            className="w-full pl-7 pr-3 py-1.5 border rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                             value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onChange={(e) => handleSearch(e.target.value)}
                         />
-                        <Video className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     </motion.div>
 
-                    <motion.select
+                    <motion.div
                         whileHover={{ scale: 1.01 }}
-                        className="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={selectedTime}
-                        onChange={(e) => setSelectedTime(e.target.value)}
+                        className="relative flex items-center min-w-[120px]"
                     >
-                        <option value="all">All Time</option>
-                        <option value="recent">Most Recent</option>
-                        <option value="today">Today</option>
-                    </motion.select>
+                        <Filter className="absolute left-2 h-3 w-3 text-muted-foreground" />
+                        <select
+                            className="w-full pl-7 pr-6 py-1.5 border rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs appearance-none bg-white"
+                            value={selectedTime}
+                            onChange={(e) => handleFilterChange(e.target.value)}
+                        >
+                            <option value="all">All Time</option>
+                            <option value="recent">Last 7 Days</option>
+                            <option value="today">Today</option>
+                        </select>
+                    </motion.div>
                 </motion.div>
 
-                {/* Snaps Grid */}
-                <motion.div variants={item}>
-                    <Card className="flex-1 flex flex-col">
-                        <CardContent>
+                {/* Snaps Grid - Exactly 6 per row */}
+                <motion.div variants={item} className="flex-1">
+                    <Card className="flex flex-col h-full">
+                        <CardHeader className="pb-2 px-4 pt-3">
+                            <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">Security Snaps</CardTitle>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="flex-1 p-3">
                             {filteredSnaps.length > 0 ? (
                                 <motion.div 
-                                    className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"
+                                    className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"
                                     layout
                                 >
-                                    {filteredSnaps.map((snap, idx) => (
+                                    {filteredSnaps.map((photo) => (
                                         <motion.div
-                                            key={idx}
+                                            key={photo.id}
                                             variants={item}
                                             initial={{ opacity: 0, scale: 0.9 }}
                                             animate={{ opacity: 1, scale: 1 }}
-                                            transition={{ duration: 0.3 }}
-                                            whileHover={{ scale: 1.03 }}
-                                            className="relative rounded-xl overflow-hidden border bg-white shadow-sm flex flex-col group"
+                                            transition={{ duration: 0.2 }}
+                                            whileHover={cardHover}
+                                            className="relative rounded-lg overflow-hidden border bg-white shadow-xs flex flex-col group cursor-pointer"
                                         >
-                                            <motion.div whileHover={imageHover}>
-                                                <img 
-                                                    src={snap.url} 
-                                                    alt={`Security Snap ${idx + 1}`} 
-                                                    className="w-full h-40 object-cover cursor-pointer" 
+                                            {/* Clean image container with time on bottom left */}
+                                            <div className="relative w-full pt-[125%]"> {/* 4:5 aspect ratio */}
+                                                <motion.img 
+                                                    src={photo.url.replace(/\\\//g, '/')} 
+                                                    alt={`Security Snap ${photo.id}`}
+                                                    className="absolute inset-0 w-full h-full object-cover"
+                                                    style={{ 
+                                                        transform: 'rotate(90deg)',
+                                                        transformOrigin: 'center'
+                                                    }}
+                                                    whileHover={imageHover}
+                                                    onError={(e) => {
+                                                        console.error('Failed to load image:', photo.url);
+                                                        (e.target as HTMLImageElement).src = 'https://via.placeholder.com/200x250?text=Image+Error';
+                                                    }}
                                                 />
-                                            </motion.div>
-                                            <motion.span 
-                                                className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded"
-                                                initial={{ opacity: 0.7 }}
-                                                whileHover={{ opacity: 1 }}
-                                            >
-                                                {snap.time}
-                                            </motion.span>
+                                                
+                                                {/* Time display - bottom left, always visible */}
+                                                <div className="absolute bottom-2 left-2 bg-black/60 text-white text-[10px] px-2 py-1 rounded-md backdrop-blur-sm">
+                                                    {photo.time_ago}
+                                                </div>
+                                            </div>
+
+                                            {/* Additional info on hover */}
                                             <motion.div 
-                                                className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center"
+                                                className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-center items-center p-3"
                                             >
-                                                <motion.button 
-                                                    whileHover={{ scale: 1.1 }}
-                                                    className="bg-white/90 text-black px-3 py-1 rounded-full text-xs font-medium shadow"
-                                                >
-                                                    View Details
-                                                </motion.button>
+                                                
                                             </motion.div>
                                         </motion.div>
                                     ))}
@@ -196,10 +261,13 @@ export default function SecuritySnaps() {
                                 <motion.div 
                                     initial={{ opacity: 0 }}
                                     animate={{ opacity: 1 }}
-                                    className="flex flex-col items-center justify-center py-12"
+                                    className="flex flex-col items-center justify-center py-8"
                                 >
-                                    <Video className="h-12 w-12 text-gray-400 mb-4" />
-                                    <p className="text-gray-500">No security snaps found</p>
+                                    <Video className="h-12 w-12 text-gray-300 mb-3" />
+                                    <p className="text-gray-400 text-sm mb-1">No security snaps found</p>
+                                    <p className="text-gray-300 text-xs text-center">
+                                        Adjust your search or filter criteria
+                                    </p>
                                 </motion.div>
                             )}
                         </CardContent>

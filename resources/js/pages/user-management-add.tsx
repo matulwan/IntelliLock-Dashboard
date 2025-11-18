@@ -15,6 +15,7 @@ import AppLayout from '@/layouts/app-layout';
 const roles = [
     { value: 'Student', label: 'Student' },
     { value: 'Lecturer', label: 'Lecturer' },
+    { value: 'Key', label: 'Register Room' },
 ];
 
 type AddUserForm = {
@@ -22,6 +23,8 @@ type AddUserForm = {
     phone: string;
     matrix_number: string;
     role: string;
+    rfid_uid: string;
+    fingerprint_id: string;
 };
 
 type Status = 'waiting' | 'success' | 'failed';
@@ -32,6 +35,8 @@ export default function AddUser() {
         phone: '',
         matrix_number: '',
         role: '',
+        rfid_uid: '',
+        fingerprint_id: '',
     });
 
     const [rfidStatus, setRfidStatus] = useState<Status>('waiting');
@@ -41,12 +46,13 @@ export default function AddUser() {
 
     const submit: FormEventHandler = (e) => {
         e.preventDefault();
+        // prefer manually entered field, fallback to scanned
+        setData({
+            ...data,
+            rfid_uid: data.rfid_uid || rfidUid || '',
+            fingerprint_id: data.fingerprint_id || biometricId || '',
+        });
         post(route('user-management.store'), {
-            data: {
-                ...data,
-                rfid_uid: rfidUid,
-                biometric_id: biometricId,
-            },
             onFinish: () => reset(),
         });
     };
@@ -75,6 +81,7 @@ export default function AddUser() {
                 if (uid) {
                     setRfidStatus('success');
                     setRfidUid(uid);
+                    setData('rfid_uid', uid);
                 } else {
                     setRfidStatus('failed');
                 }
@@ -84,13 +91,16 @@ export default function AddUser() {
                 if (bioId) {
                     setBiometricStatus('success');
                     setBiometricId(bioId);
+                    setData('fingerprint_id', bioId);
                 } else {
                     setBiometricStatus('failed');
                 }
             }
         });
 
-        return () => client.end();
+        return () => {
+            client.end();
+        };
     }, []);
 
     return (
@@ -123,7 +133,7 @@ export default function AddUser() {
                                     <div className="grid grid-cols-1 gap-6">
                                         <div>
                                             <Label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
-                                                Full Name
+                                                {data.role === 'Key' ? 'Key/Room Name' : 'Full Name'}
                                             </Label>
                                             <Input
                                                 id="name"
@@ -131,6 +141,7 @@ export default function AddUser() {
                                                 required
                                                 autoFocus
                                                 autoComplete="name"
+                                                placeholder={data.role === 'Key' ? 'e.g. Lab A, Room 101' : ''}
                                                 value={data.name}
                                                 onChange={(e) => setData('name', e.target.value)}
                                                 disabled={processing}
@@ -139,22 +150,24 @@ export default function AddUser() {
                                             <InputError message={errors.name} className="mt-1" />
                                         </div>
 
-                                        <div>
-                                            <Label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
-                                                Phone Number
-                                            </Label>
-                                            <Input
-                                                id="phone"
-                                                type="tel"
-                                                required
-                                                autoComplete="tel"
-                                                value={data.phone}
-                                                onChange={(e) => setData('phone', e.target.value)}
-                                                disabled={processing}
-                                                className="w-full"
-                                            />
-                                            <InputError message={errors.phone} className="mt-1" />
-                                        </div>
+                                        {data.role !== 'Key' && (
+                                            <div>
+                                                <Label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Phone Number
+                                                </Label>
+                                                <Input
+                                                    id="phone"
+                                                    type="tel"
+                                                    required
+                                                    autoComplete="tel"
+                                                    value={data.phone}
+                                                    onChange={(e) => setData('phone', e.target.value)}
+                                                    disabled={processing}
+                                                    className="w-full"
+                                                />
+                                                <InputError message={errors.phone} className="mt-1" />
+                                            </div>
+                                        )}
 
                                         <div>
                                             <Label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-1">
@@ -172,6 +185,30 @@ export default function AddUser() {
                                             </Select>
                                             <InputError message={errors.role} />
                                         </div>
+
+                                        {data.role === 'Key' && (
+                                            <motion.div
+                                                initial={{ opacity: 0, height: 0 }}
+                                                animate={{ opacity: 1, height: 'auto' }}
+                                                exit={{ opacity: 0, height: 0 }}
+                                                transition={{ duration: 0.3 }}
+                                            >
+                                                <Label htmlFor="matrix_number" className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Description (Optional)
+                                                </Label>
+                                                <Input
+                                                    id="matrix_number"
+                                                    type="text"
+                                                    placeholder="e.g. Lab A, Room 101"
+                                                    autoComplete="off"
+                                                    value={data.matrix_number}
+                                                    onChange={(e) => setData('matrix_number', e.target.value)}
+                                                    disabled={processing}
+                                                    className="w-full"
+                                                />
+                                                <InputError message={errors.matrix_number} />
+                                            </motion.div>
+                                        )}
 
                                         {data.role === 'Student' && (
                                             <motion.div
@@ -198,89 +235,51 @@ export default function AddUser() {
                                         )}
                                     </div>
 
-                                    <div className="space-y-4">
+                                    <div className="space-y-6">
+                                        {/* Manual UID Inputs */}
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div className={`rounded-xl p-4 border transition-all ${
-                                                rfidStatus === 'waiting' ? 'border-blue-200 bg-blue-50' : 
-                                                rfidStatus === 'success' ? 'border-green-200 bg-green-50' : 
-                                                'border-red-200 bg-red-50'
-                                            }`}>
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`p-2 rounded-lg ${
-                                                        rfidStatus === 'waiting' ? 'bg-blue-100 text-blue-600' : 
-                                                        rfidStatus === 'success' ? 'bg-green-100 text-green-600' : 
-                                                        'bg-red-100 text-red-600'
-                                                    }`}>
-                                                        <CreditCard className="h-5 w-5" />
-                                                    </div>
-                                                    <div>
-                                                        <h3 className="font-medium text-sm">RFID Registration</h3>
-                                                        <div className="text-xs mt-1">
-                                                            {rfidStatus === 'waiting' && <span className="text-blue-600">Waiting for RFID scan...</span>}
-                                                            {rfidStatus === 'success' && <span className="flex items-center gap-1 text-green-600"><BadgeCheck className="h-3 w-3" /> Registered</span>}
-                                                            {rfidStatus === 'failed' && <span className="flex items-center gap-1 text-red-600"><XCircle className="h-3 w-3" /> Failed</span>}
-                                                        </div>
-                                                        {rfidStatus === 'success' && rfidUid && (
-                                                            <div className="text-xs text-green-700 mt-1">UID: {rfidUid}</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                {rfidStatus === 'failed' && (
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="sm" 
-                                                        className="mt-2 w-full text-xs" 
-                                                        onClick={retryRfid}
-                                                    >
-                                                        <RefreshCw className="h-3 w-3 mr-1" /> Retry
-                                                    </Button>
-                                                )}
+                                            <div>
+                                                <Label htmlFor="rfid_uid" className="block text-sm font-medium text-gray-700 mb-1">
+                                                    RFID UID {data.role === 'Key' && <span className="text-red-500">*</span>} (paste or scan)
+                                                </Label>
+                                                <Input
+                                                    id="rfid_uid"
+                                                    type="text"
+                                                    placeholder="e.g. 0A3B9C..."
+                                                    value={data.rfid_uid}
+                                                    onChange={(e) => setData('rfid_uid', e.target.value)}
+                                                    disabled={processing}
+                                                    className="w-full"
+                                                />
+                                                <InputError message={errors.rfid_uid as unknown as string} className="mt-1" />
                                             </div>
-
-                                            <div className={`rounded-xl p-4 border transition-all ${
-                                                biometricStatus === 'waiting' ? 'border-purple-200 bg-purple-50' : 
-                                                biometricStatus === 'success' ? 'border-green-200 bg-green-50' : 
-                                                'border-red-200 bg-red-50'
-                                            }`}>
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`p-2 rounded-lg ${
-                                                        biometricStatus === 'waiting' ? 'bg-purple-100 text-purple-600' : 
-                                                        biometricStatus === 'success' ? 'bg-green-100 text-green-600' : 
-                                                        'bg-red-100 text-red-600'
-                                                    }`}>
-                                                        <Fingerprint className="h-5 w-5" />
-                                                    </div>
-                                                    <div>
-                                                        <h3 className="font-medium text-sm">Biometric Registration</h3>
-                                                        <div className="text-xs mt-1">
-                                                            {biometricStatus === 'waiting' && <span className="text-purple-600">Waiting for biometric scan...</span>}
-                                                            {biometricStatus === 'success' && <span className="flex items-center gap-1 text-green-600"><BadgeCheck className="h-3 w-3" /> Registered</span>}
-                                                            {biometricStatus === 'failed' && <span className="flex items-center gap-1 text-red-600"><XCircle className="h-3 w-3" /> Failed</span>}
-                                                        </div>
-                                                        {biometricStatus === 'success' && biometricId && (
-                                                            <div className="text-xs text-green-700 mt-1">ID: {biometricId}</div>
-                                                        )}
-                                                    </div>
+                                            {data.role !== 'Key' && (
+                                                <div>
+                                                    <Label htmlFor="fingerprint_id" className="block text-sm font-medium text-gray-700 mb-1">
+                                                        Fingerprint ID (number)
+                                                    </Label>
+                                                    <Input
+                                                        id="fingerprint_id"
+                                                        type="number"
+                                                        placeholder="e.g. 12"
+                                                        value={data.fingerprint_id}
+                                                        onChange={(e) => setData('fingerprint_id', e.target.value)}
+                                                        disabled={processing}
+                                                        className="w-full"
+                                                    />
+                                                    <InputError message={errors.fingerprint_id as unknown as string} className="mt-1" />
                                                 </div>
-                                                {biometricStatus === 'failed' && (
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="sm" 
-                                                        className="mt-2 w-full text-xs" 
-                                                        onClick={retryBiometric}
-                                                    >
-                                                        <RefreshCw className="h-3 w-3 mr-1" /> Retry
-                                                    </Button>
-                                                )}
-                                            </div>
+                                            )}
                                         </div>
+
+                                        
                                     </div>
 
                                     <div className="flex flex-col sm:flex-row gap-3 pt-2">
                                         <Button 
                                             type="submit" 
                                             className="w-full sm:w-auto bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-md"
-                                            disabled={processing || rfidStatus !== 'success' || biometricStatus !== 'success'}
+                                            disabled={processing}
                                         >
                                             {processing && <LoaderCircle className="h-4 w-4 animate-spin mr-2" />}
                                             Register User

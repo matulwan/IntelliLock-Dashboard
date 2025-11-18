@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Carbon\Carbon;
 
 class IoTDevice extends Model
 {
@@ -20,49 +19,50 @@ class IoTDevice extends Model
         'wifi_strength',
         'uptime',
         'free_memory',
-        'last_seen',
-        'location',
-        'description'
+        'last_seen'
     ];
 
     protected $casts = [
         'last_seen' => 'datetime',
         'wifi_strength' => 'integer',
-        'uptime' => 'integer',
         'free_memory' => 'integer'
     ];
 
     /**
-     * Check if device is online (seen within last 5 minutes)
+     * Get the device status color for UI
      */
-    public function isOnline(): bool
+    public function getStatusColorAttribute()
     {
-        return $this->last_seen && $this->last_seen->diffInMinutes(now()) <= 5;
+        return match($this->status) {
+            'online' => 'green',
+            'offline' => 'red',
+            'error' => 'yellow',
+            default => 'gray',
+        };
     }
 
     /**
-     * Get formatted uptime
+     * Get the device icon based on type
      */
-    public function getFormattedUptimeAttribute(): string
+    public function getDeviceIconAttribute()
     {
-        if (!$this->uptime) return 'Unknown';
-        
-        $hours = floor($this->uptime / 3600);
-        $minutes = floor(($this->uptime % 3600) / 60);
-        
-        return "{$hours}h {$minutes}m";
+        return match($this->device_type) {
+            'camera' => '📷',
+            'access_control' => '🔒',
+            'sensor' => '📡',
+            default => '🔧',
+        };
     }
 
     /**
-     * Get WiFi signal strength description
+     * Check if device is currently online (seen in last 2 minutes)
      */
-    public function getWifiStrengthDescriptionAttribute(): string
+    public function getIsCurrentlyOnlineAttribute()
     {
-        if (!$this->wifi_strength) return 'Unknown';
+        if (!$this->last_seen) {
+            return false;
+        }
         
-        if ($this->wifi_strength >= -50) return 'Excellent';
-        if ($this->wifi_strength >= -60) return 'Good';
-        if ($this->wifi_strength >= -70) return 'Fair';
-        return 'Poor';
+        return $this->last_seen->gt(now()->subMinutes(2));
     }
 }

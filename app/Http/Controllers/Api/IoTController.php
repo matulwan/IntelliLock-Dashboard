@@ -21,6 +21,17 @@ use Carbon\Carbon;
 class IoTController extends Controller
 {
     /**
+     * Lightweight ping endpoint for ESP32 connectivity tests
+     * Endpoint: GET /api/intellilock/ping
+     */
+    public function ping(Request $request): JsonResponse
+    {
+        return response()->json([
+            'status' => 'ok',
+            'time' => now()->toIso8601String(),
+        ]);
+    }
+    /**
      * Authenticate RFID/Fingerprint access
      */
     public function authenticate(Request $request): JsonResponse
@@ -95,13 +106,12 @@ class IoTController extends Controller
             'device' => 'required|string'
         ]);
 
+        // Align with access_logs schema: action, user, key_name, device, created_at
         AccessLog::create([
             'user' => $request->user,
-            'type' => $request->type,
-            'timestamp' => now(),
-            'status' => $request->status,
-            'role' => $request->role ?? 'guest',
-            'device' => $request->device
+            'action' => $request->status, // store success/denied for dashboard stats
+            'key_name' => null,
+            'device' => $request->device,
         ]);
 
         return response()->json(['status' => 'logged']);
@@ -137,6 +147,52 @@ class IoTController extends Controller
         broadcast(new DeviceStatusUpdated($device));
 
         return response()->json(['status' => 'updated', 'device_id' => $device->id]);
+    }
+
+    /**
+     * Check if an RFID UID belongs to a key tag
+     * Endpoint: GET /api/iot/keys/check?uid=FA1AB9B2
+     */
+    public function checkKeyTag(Request $request): JsonResponse
+    {
+        $request->validate([
+            'uid' => 'required|string',
+        ]);
+
+        $uid = strtoupper($request->input('uid'));
+        
+        // Check if it's a key tag
+        $labKey = LabKey::where('key_rfid_uid', $uid)->first();
+        
+        if ($labKey) {
+            return response()->json([
+                'is_key' => true,
+                'key_name' => $labKey->key_name,
+                'key_id' => $labKey->id,
+                'status' => $labKey->status,
+                'message' => 'This is a key tag'
+            ]);
+        }
+        
+        // Check if it's a user RFID
+        $user = User::where('rfid_uid', $uid)->where('iot_access', true)->first();
+        
+        if ($user) {
+            return response()->json([
+                'is_key' => false,
+                'is_user' => true,
+                'user_name' => $user->name,
+                'user_id' => $user->id,
+                'message' => 'This is a user RFID card'
+            ]);
+        }
+        
+        // Unknown RFID
+        return response()->json([
+            'is_key' => false,
+            'is_user' => false,
+            'message' => 'Unknown RFID tag'
+        ]);
     }
 
     /**
@@ -398,7 +454,7 @@ class IoTController extends Controller
         
         // Get today's access count
         $todayAccess = AccessLog::where('device', $device)
-                                ->whereDate('timestamp', today())
+                                ->whereDate('created_at', today())
                                 ->count();
 
         return response()->json([
@@ -821,7 +877,8 @@ class IoTController extends Controller
                     ]);
 
                 case 'key_tagged_taken':
-                    // Map to key_taken
+                case 'key_taken':
+                    // Process key checkout
                     $keyRfidUid = $keyInfo ?: $userIdentifier;
                     if (empty($keyRfidUid)) {
                         return response()->json([
@@ -830,18 +887,19 @@ class IoTController extends Controller
                         ], 400);
                     }
 
+                    $keyRfidUid = strtoupper($keyRfidUid);
                     $labKey = LabKey::where('key_name', $keyRfidUid)
-                                   ->orWhere('key_rfid_uid', strtoupper($keyRfidUid))
+                                   ->orWhere('key_rfid_uid', $keyRfidUid)
                                    ->first();
                     
                     if (!$labKey) {
                         $labKey = LabKey::create([
-                            'key_name' => $keyRfidUid,
-                            'key_rfid_uid' => strtoupper($keyRfidUid),
+                            'key_name' => "Key {$keyRfidUid}",
+                            'key_rfid_uid' => $keyRfidUid,
                             'description' => 'Auto-registered key',
                             'status' => 'checked_out'
                         ]);
-                    } else {
+                    } elseif ($labKey->status === 'available') {
                         $labKey->update(['status' => 'checked_out']);
                     }
 
@@ -1098,7 +1156,7 @@ class IoTController extends Controller
             
             // Get the most recent access log or transaction
             $recentAccessLog = AccessLog::where('device', $device)
-                                       ->latest('timestamp')
+                                       ->latest('created_at')
                                        ->first();
             
             $recentTransaction = KeyTransaction::where('device', $device)
@@ -1253,7 +1311,7 @@ class IoTController extends Controller
         
         // Get recent activity
         $recentAccess = AccessLog::where('device', $device)
-                                 ->latest('timestamp')
+                                 ->latest('created_at')
                                  ->limit(5)
                                  ->get();
         
@@ -1269,7 +1327,7 @@ class IoTController extends Controller
         
         // Get today's statistics
         $todayAccess = AccessLog::where('device', $device)
-                                ->whereDate('timestamp', today())
+                                ->whereDate('created_at', today())
                                 ->count();
         
         $todayCheckouts = KeyTransaction::where('device', $device)
@@ -1308,18 +1366,18 @@ class IoTController extends Controller
      */
     private function logAccessAttempt(string $user, string $type, string $status, string $role, string $device, ?int $keyId = null, ?string $keyName = null): void
     {
+        // Persist minimal fields matching schema; encode outcome in 'action' for dashboard stats
         $accessLog = AccessLog::create([
             'user' => $user,
-            'type' => $type,
-            'timestamp' => now(),
-            'status' => $status,
-            'role' => $role,
+            'action' => $status, // success|denied
             'device' => $device,
-            'lab_key_id' => $keyId,
-            'key_name' => $keyName
+            'key_name' => $keyName,
         ]);
 
         // Broadcast access attempt
         broadcast(new AccessAttemptLogged($accessLog));
+
+        // Broadcast dashboard update with latest data
+        broadcast(new DashboardDataUpdated(DashboardService::getDashboardData()));
     }
 }

@@ -5,16 +5,24 @@ import { Head } from '@inertiajs/react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Users, Video, Wifi, WifiOff, Lock, CheckCircle, XCircle, Shield, Fingerprint, CreditCard, DoorOpen, Key, Clock, TrendingUp } from 'lucide-react';
+import { Users, Video, Wifi, WifiOff, Lock, CheckCircle, XCircle, Shield, Fingerprint, CreditCard, DoorOpen, Key, Clock, TrendingUp, Camera, CameraOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+interface SecuritySnap {
+    id: number;
+    url: string;
+    time: string;
+    time_ago: string;
+}
+
 interface KeyBox {
-  status: string;
-  location: string;
-  last_seen: string;
-  ip_address: string;
-  wifi_strength: number | null;
-  uptime: string;
+    status: string;
+    location: string;
+    last_seen: string;
+    ip_address: string;
+    wifi_strength: number | null;
+    uptime: string;
+    camera_status?: string;
 }
 
 interface Stats {
@@ -72,6 +80,8 @@ interface Props {
   recentActivity: Activity[];
   recentKeyTransactions: KeyTransaction[];
   weeklyData: WeeklyData[];
+  latestSecuritySnap: SecuritySnap | null;
+  cameraStatus: string;
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -108,7 +118,99 @@ const iconHover = {
     transition: { duration: 0.2 },
 };
 
-export default function Overview({ keyBox, stats, recentActivity, recentKeyTransactions, weeklyData }: Props) {
+// Function to get camera status
+const getCameraStatus = (cameraStatus: string): { status: string; color: string; icon: React.ReactNode; description: string } => {
+    const isOnline = cameraStatus === 'online';
+    
+    return {
+        status: isOnline ? 'Online' : 'Offline',
+        color: isOnline ? 'text-green-600' : 'text-red-600',
+        icon: isOnline ? <Camera className="h-4 w-4 text-green-600" /> : <CameraOff className="h-4 w-4 text-red-600" />,
+        description: isOnline ? 'Live feed active' : 'Camera disconnected'
+    };
+};
+
+// Function to process latest unlock and replace AUTO_RETURN with real name
+const processLatestUnlock = (activity: Activity[], transactions: KeyTransaction[]): Activity | null => {
+    if (!activity || activity.length === 0) return null;
+    
+    const latestActivity = activity[0];
+    
+    // If the latest activity is AUTO_RETURN, try to find the real user
+    if (latestActivity.user === 'AUTO_RETURN' || latestActivity.user === 'AUTO_RETURNED') {
+        // Look for the most recent key transaction to find who actually took the key
+        const latestCheckout = transactions.find(t => t.action === 'checkout');
+        if (latestCheckout) {
+            return {
+                ...latestActivity,
+                user: latestCheckout.user_name
+            };
+        }
+        
+        // If no transaction found, look for the previous non-AUTO_RETURN activity
+        const previousActivity = activity.find(a => a.user !== 'AUTO_RETURN' && a.user !== 'AUTO_RETURNED');
+        if (previousActivity) {
+            return {
+                ...latestActivity,
+                user: previousActivity.user
+            };
+        }
+    }
+    
+    return latestActivity;
+};
+
+// Function to get security snap data with fallback
+const getSecuritySnap = (latestSnap: SecuritySnap | null) => {
+    if (latestSnap && latestSnap.url) {
+        return latestSnap;
+    }
+    
+    // Return a placeholder if no snap available
+    return null;
+};
+
+export default function Overview({ 
+    keyBox: initialKeyBox, 
+    stats: initialStats, 
+    recentActivity: initialActivity, 
+    recentKeyTransactions: initialTransactions, 
+    weeklyData: initialWeeklyData,
+    latestSecuritySnap,
+    cameraStatus = 'offline'
+}: Props) {
+    const [keyBox, setKeyBox] = React.useState(initialKeyBox);
+    const [stats, setStats] = React.useState(initialStats);
+    const [recentActivity, setRecentActivity] = React.useState(initialActivity);
+    const [recentKeyTransactions, setRecentKeyTransactions] = React.useState(initialTransactions);
+    const [weeklyData, setWeeklyData] = React.useState(initialWeeklyData);
+
+    React.useEffect(() => {
+        // Listen for real-time updates
+        const channel = window.Echo.channel('dashboard');
+        channel.listen('DashboardDataUpdated', (e: any) => {
+            const data = e.data;
+            setKeyBox(data.keyBox);
+            setStats(data.stats);
+            if (data.recentActivity) setRecentActivity(data.recentActivity);
+            if (data.recentKeyTransactions) setRecentKeyTransactions(data.recentKeyTransactions);
+            if (data.weeklyData) setWeeklyData(data.weeklyData);
+        });
+
+        return () => {
+            channel.stopListening('DashboardDataUpdated');
+        };
+    }, []);
+
+    // Process latest unlock to replace AUTO_RETURN
+    const processedLatestUnlock = processLatestUnlock(recentActivity, recentKeyTransactions);
+    
+    // Get camera status - use prop first, then fallback to keyBox.camera_status
+    const actualCameraStatus = cameraStatus || keyBox.camera_status || 'offline';
+    const cameraStatusInfo = getCameraStatus(actualCameraStatus);
+    
+    // Get security snap
+    const securitySnap = getSecuritySnap(latestSecuritySnap);
 
     // Use real weekly data from props
     const chartHeight = 220;
@@ -116,22 +218,25 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
     const padding = 40;
     const graphHeight = chartHeight - (padding * 2);
     const graphWidth = chartWidth - (padding * 2);
-    const maxValue = Math.max(...weeklyData.map(d => d.count));
-    const minValue = Math.min(...weeklyData.map(d => d.count));
+    const series = (weeklyData && weeklyData.length > 0) ? weeklyData : [{ date: '', count: 0 }];
+    const maxValue = Math.max(...series.map(d => d.count));
+    const minValue = Math.min(...series.map(d => d.count));
+    const range = Math.max(1, maxValue - minValue);
     const generateLinePath = () => {
-        const points = weeklyData.map((data, index) => {
-            const x = padding + (index * (graphWidth / (weeklyData.length - 1)));
-            const y = padding + graphHeight - ((data.count - minValue) / (maxValue - minValue)) * graphHeight;
+        const points = series.map((data, index) => {
+            const denom = Math.max(1, (series.length - 1));
+            const x = padding + (index * (graphWidth / denom));
+            const y = padding + graphHeight - ((data.count - minValue) / range) * graphHeight;
             return `${x},${y}`;
         });
         return `M ${points.join(' L ')}`;
     };
 
     // Use real data from backend
-    const latestUnlock = recentActivity && recentActivity.length > 0 ? {
-        name: recentActivity[0].user,
-        time: recentActivity[0].timestamp,
-        type: recentActivity[0].type === 'fingerprint' ? 'Biometric' : 'RFID',
+    const latestUnlock = processedLatestUnlock ? {
+        name: processedLatestUnlock.user,
+        time: processedLatestUnlock.timestamp,
+        type: processedLatestUnlock.type === 'fingerprint' ? 'Biometric' : 'RFID',
     } : null;
 
     const latestKeyTaken = recentKeyTransactions && recentKeyTransactions.length > 0 ? {
@@ -139,9 +244,6 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
         number: recentKeyTransactions[0].id,
         time: recentKeyTransactions[0].transaction_time,
     } : null;
-
-    // No security snaps yet - will be populated when ESP32-CAM uploads photos
-    const latestSnap = null;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -290,19 +392,23 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                     </motion.div>
                                     Latest Security Snap
                                 </CardTitle>
-                                {latestSnap && <span className="text-xs text-muted-foreground">{latestSnap.time}</span>}
+                                {securitySnap && <span className="text-xs text-muted-foreground">{securitySnap.time}</span>}
                             </CardHeader>
                             <CardContent className="flex items-center gap-4">
-                                {latestSnap ? (
+                                {securitySnap ? (
                                     <>
                                         <motion.div 
                                             whileHover={{ scale: 1.05 }}
                                             className="relative"
                                         >
                                             <img 
-                                                src={latestSnap.url} 
+                                                src={securitySnap.url} 
                                                 alt="Latest Security Snap" 
                                                 className="w-32 h-24 object-cover rounded border" 
+                                                onError={(e) => {
+                                                    // If image fails to load, show placeholder
+                                                    e.currentTarget.style.display = 'none';
+                                                }}
                                             />
                                             <motion.div 
                                                 className="absolute inset-0 bg-black/20 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity"
@@ -311,6 +417,7 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                                 <motion.button 
                                                     className="bg-white/90 text-black px-3 py-1 rounded-full text-xs font-medium shadow"
                                                     whileHover={{ scale: 1.1 }}
+                                                    onClick={() => window.open(securitySnap.url, '_blank')}
                                                 >
                                                     View Full Size
                                                 </motion.button>
@@ -318,14 +425,15 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                         </motion.div>
                                         <div className="flex flex-col gap-1">
                                             <span className="text-xs text-muted-foreground">Most recent snapshot from ESP32 cam</span>
+                                            <span className="text-xs text-green-600">{securitySnap.time_ago}</span>
                                         </div>
                                     </>
                                 ) : (
                                     <div className="flex items-center gap-3 text-muted-foreground">
                                         <Video className="h-6 w-6" />
                                         <div>
-                                            <div className="font-medium">No photos yet</div>
-                                            <div className="text-xs">Waiting for ESP32-CAM...</div>
+                                            <div className="font-medium">No security snaps available</div>
+                                            <div className="text-xs">-</div>
                                         </div>
                                     </div>
                                 )}
@@ -388,25 +496,25 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                                 <CardTitle className="text-sm font-medium">Camera Status</CardTitle>
                                 <motion.div whileHover={iconHover}>
-                                    <Video className="h-4 w-4 text-muted-foreground" />
+                                    {cameraStatusInfo.icon}
                                 </motion.div>
                             </CardHeader>
                             <CardContent>
                                 <motion.div 
-                                    className={`text-2xl font-bold capitalize ${keyBox.status === 'online' ? 'text-green-600' : 'text-red-600'}`}
+                                    className={`text-2xl font-bold ${cameraStatusInfo.color}`}
                                     initial={{ scale: 0.9 }}
                                     animate={{ scale: 1 }}
                                     transition={{ type: 'spring', stiffness: 500 }}
                                 >
-                                    {keyBox.status}
+                                    {cameraStatusInfo.status}
                                 </motion.div>
-                                <p className="text-xs text-muted-foreground">Live feed from main entrance</p>
+                                <p className="text-xs text-muted-foreground">{cameraStatusInfo.description}</p>
                             </CardContent>
                         </Card>
                     </motion.div>
                 </motion.div>
 
-                {/* Access Frequency per Day - Line Graph */}
+                {/* Rest of your component remains the same */}
                 <motion.div variants={item}>
                     <Card>
                         <CardHeader>
@@ -467,9 +575,10 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                         transition={{ duration: 1, ease: "easeInOut" }}
                                     />
                                     {/* Data points */}
-                                    {weeklyData.map((data, index) => {
-                                        const x = padding + (index * (graphWidth / (weeklyData.length - 1)));
-                                        const y = padding + graphHeight - ((data.count - minValue) / (maxValue - minValue)) * graphHeight;
+                                    {series.map((data, index) => {
+                                        const denom = Math.max(1, (series.length - 1));
+                                        const x = padding + (index * (graphWidth / denom));
+                                        const y = padding + graphHeight - ((data.count - minValue) / range) * graphHeight;
                                         return (
                                             <motion.g 
                                                 key={index}
@@ -497,8 +606,9 @@ export default function Overview({ keyBox, stats, recentActivity, recentKeyTrans
                                         );
                                     })}
                                     {/* X-axis labels */}
-                                    {weeklyData.map((data, index) => {
-                                        const x = padding + (index * (graphWidth / (weeklyData.length - 1)));
+                                    {series.map((data, index) => {
+                                        const denom = Math.max(1, (series.length - 1));
+                                        const x = padding + (index * (graphWidth / denom));
                                         return (
                                             <motion.text
                                                 key={index}
